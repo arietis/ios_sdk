@@ -169,24 +169,8 @@ static NSString * const kDateFormat                 = @"yyyy-MM-dd'T'HH:mm:ss.SS
 }
 
 + (NSDateFormatter *)getDateFormatter {
-    NSDateFormatter *dateFormatter = [[NSDateFormatter alloc] init];
-    if ([NSCalendar instancesRespondToSelector:@selector(calendarWithIdentifier:)]) {
-        // http://stackoverflow.com/a/3339787
-        NSString *calendarIdentifier;
-#pragma clang diagnostic push
-#pragma clang diagnostic ignored "-Wtautological-pointer-compare"
-        if (&NSCalendarIdentifierGregorian != NULL) {
-#pragma clang diagnostic pop
-            calendarIdentifier = NSCalendarIdentifierGregorian;
-        } else {
-#pragma clang diagnostic push
-#pragma clang diagnostic ignored "-Wunreachable-code"
-#pragma clang diagnostic ignored "-Wdeprecated-declarations"
-            calendarIdentifier = NSGregorianCalendar;
-#pragma clang diagnostic pop
-        }
-        dateFormatter.calendar = [NSCalendar calendarWithIdentifier:calendarIdentifier];
-    }
+    NSDateFormatter *dateFormatter = [NSDateFormatter new];
+    dateFormatter.calendar = [NSCalendar calendarWithIdentifier:NSCalendarIdentifierGregorian];
     dateFormatter.locale = [NSLocale systemLocale];
     [dateFormatter setDateFormat:kDateFormat];
 
@@ -755,14 +739,24 @@ responseDataHandler:(void (^)(ADJResponseData *responseData))responseDataHandler
                 suffixErrorMessage:(NSString *)suffixErrorMessage
                    activityPackage:(ADJActivityPackage *)activityPackage
                responseDataHandler:(void (^)(ADJResponseData *responseData))responseDataHandler {
-    NSError *responseError = nil;
-    NSHTTPURLResponse *urlResponse = nil;
-#pragma clang diagnostic push
-#pragma clang diagnostic ignored "-Wdeprecated-declarations"
-    NSData *data = [NSURLConnection sendSynchronousRequest:request
-                                         returningResponse:&urlResponse
-                                                     error:&responseError];
-#pragma clang diagnostic pop
+    __block NSData *data = nil;
+    __block NSError *responseError = nil;
+    __block NSHTTPURLResponse *urlResponse = nil;
+
+    dispatch_semaphore_t semaphore = dispatch_semaphore_create(0);
+    [NSURLSession.sharedSession dataTaskWithRequest:request
+                                  completionHandler:^(NSData *d, NSURLResponse *response, NSError *error) {
+        data = d;
+        responseError = error;
+
+        if ([response isKindOfClass:[NSHTTPURLResponse class]]) {
+            urlResponse = (NSHTTPURLResponse *)response;
+        }
+
+        dispatch_semaphore_signal(semaphore);
+    }];
+    dispatch_semaphore_wait(semaphore, DISPATCH_TIME_FOREVER);
+
     ADJResponseData *responseData = [ADJUtil completionHandler:data
                                                       response:(NSHTTPURLResponse *)urlResponse
                                                          error:responseError
@@ -1183,37 +1177,21 @@ responseDataHandler:(void (^)(ADJResponseData *responseData))responseDataHandler
 #pragma clang diagnostic ignored "-Wundeclared-selector"
     SEL openUrlSelector = @selector(openURL:options:completionHandler:);
 #pragma clang diagnostic pop
-    if ([sharedUIApplication respondsToSelector:openUrlSelector]) {
-        /*
-         [sharedUIApplication openURL:deepLinkUrl options:@{} completionHandler:^(BOOL success) {
-         if (!success) {
-         [ADJAdjustFactory.logger error:@"Unable to open deep link (%@)", deepLinkUrl];
-         }
-         }];
-         */
-        NSMethodSignature *methSig = [sharedUIApplication methodSignatureForSelector:openUrlSelector];
-        NSInvocation *invocation = [NSInvocation invocationWithMethodSignature:methSig];
-        [invocation setSelector: openUrlSelector];
-        [invocation setTarget: sharedUIApplication];
-        NSDictionary *emptyDictionary = @{};
-        void (^completion)(BOOL) = ^(BOOL success) {
-            if (!success) {
-                [ADJAdjustFactory.logger error:@"Unable to open deep link (%@)", deepLinkUrl];
-            }
-        };
-        [invocation setArgument:&deepLinkUrl atIndex: 2];
-        [invocation setArgument:&emptyDictionary atIndex: 3];
-        [invocation setArgument:&completion atIndex: 4];
-        [invocation invoke];
-    } else {
-#pragma clang diagnostic push
-#pragma clang diagnostic ignored "-Wdeprecated-declarations"
-        BOOL success = [sharedUIApplication openURL:deepLinkUrl];
-#pragma clang diagnostic pop
+
+    NSMethodSignature *methSig = [sharedUIApplication methodSignatureForSelector:openUrlSelector];
+    NSInvocation *invocation = [NSInvocation invocationWithMethodSignature:methSig];
+    [invocation setSelector: openUrlSelector];
+    [invocation setTarget: sharedUIApplication];
+    NSDictionary *emptyDictionary = @{};
+    void (^completion)(BOOL) = ^(BOOL success) {
         if (!success) {
-            [ADJAdjustFactory.logger error:@"Unable to open deep link without completionHandler (%@)", deepLinkUrl];
+            [ADJAdjustFactory.logger error:@"Unable to open deep link (%@)", deepLinkUrl];
         }
-    }
+    };
+    [invocation setArgument:&deepLinkUrl atIndex: 2];
+    [invocation setArgument:&emptyDictionary atIndex: 3];
+    [invocation setArgument:&completion atIndex: 4];
+    [invocation invoke];
 #endif
 }
 
@@ -1233,7 +1211,7 @@ responseDataHandler:(void (^)(ADJResponseData *responseData))responseDataHandler
 
     NSMutableString *hexString  = [NSMutableString stringWithCapacity:(dataLength * 2)];
 
-    for (int i = 0; i < dataLength; ++i) {
+    for (NSUInteger i = 0; i < dataLength; ++i) {
         [hexString appendString:[NSString stringWithFormat:@"%02lx", (unsigned long)dataBuffer[i]]];
     }
 
