@@ -111,20 +111,28 @@ static NSURLSessionConfiguration *urlSessionConfiguration = nil;
 + (void)sendNSURLConnectionRequest:(NSMutableURLRequest *)request
                    responseHandler:(httpResponseHandler)responseHandler
 {
-    NSError *responseError = nil;
-    NSHTTPURLResponse *urlResponse = nil;
-    
-#pragma clang diagnostic push
-#pragma clang diagnostic ignored "-Wdeprecated-declarations"
-    NSData *data = [NSURLConnection sendSynchronousRequest:request
-                                         returningResponse:&urlResponse
-                                                     error:&responseError];
-#pragma clang diagnostic pop
-    
+    __block NSData *data = nil;
+    __block NSError *responseError = nil;
+    __block NSHTTPURLResponse *urlResponse = nil;
+
+    dispatch_semaphore_t semaphore = dispatch_semaphore_create(0);
+    [NSURLSession.sharedSession dataTaskWithRequest:request
+                                  completionHandler:^(NSData *d, NSURLResponse *response, NSError *error) {
+        data = d;
+        responseError = error;
+
+        if ([response isKindOfClass:[NSHTTPURLResponse class]]) {
+            urlResponse = (NSHTTPURLResponse *)response;
+        }
+
+        dispatch_semaphore_signal(semaphore);
+    }];
+    dispatch_semaphore_wait(semaphore, DISPATCH_TIME_FOREVER);
+
     ATLHttpResponse *httpResponseData = [ATLUtilNetworking completionHandler:data
-                                                                     response:(NSHTTPURLResponse *)urlResponse
-                                                                        error:responseError];
-    
+                                                                    response:urlResponse
+                                                                       error:responseError];
+
     responseHandler(httpResponseData);
 }
 
